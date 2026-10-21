@@ -1,0 +1,203 @@
+version: "3.8"
+
+# ─────────────────────────────────────────────────────────────────────────────
+# SOC Alert Triage System — Docker Compose Stack
+#
+# Services:
+#   elasticsearch  — Alert storage & indexing
+#   kibana         — Analyst dashboard
+#   logstash       — Log parsing & GeoIP enrichment pipeline
+#   soc-pipeline   — Python enrichment + ML scoring engine
+#   redis          — Caching layer for TI API results
+#
+# Quick start:
+#   cp .env.example .env && nano .env  # Add API keys
+#   docker-compose up -d
+#   docker-compose logs -f soc-pipeline
+# ─────────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Elasticsearch ───────────────────────────────────────────────────────────
+  elasticsearch:
+    image: docker.elastic.co/elasticsearch/elasticsearch:8.12.0
+    container_name: soc-elasticsearch
+    environment:
+      - node.name=soc-node-1
+      - cluster.name=soc-cluster
+      - discovery.type=single-node
+      - xpack.security.enabled=false
+      - xpack.security.enrollment.enabled=false
+      - ES_JAVA_OPTS=-Xms2g -Xmx2g
+      - bootstrap.memory_lock=true
+    ulimits:
+      memlock:
+        soft: -1
+        hard: -1
+      nofile:
+        soft: 65536
+        hard: 65536
+    volumes:
+      - es_data:/usr/share/elasticsearch/data
+    ports:
+      - "9200:9200"
+      - "9300:9300"
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:9200/_cluster/health || exit 1"]
+      interval: 15s
+      timeout: 10s
+      retries: 10
+      start_period: 60s
+    restart: unless-stopped
+
+  # ── Kibana ──────────────────────────────────────────────────────────────────
+  kibana:
+    image: docker.elastic.co/kibana/kibana:8.12.0
+    container_name: soc-kibana
+    environment:
+      - ELASTICSEARCH_HOSTS=http://elasticsearch:9200
+      - SERVER_HOST=0.0.0.0
+      - SERVER_NAME=soc-kibana
+      - XPACK_SECURITY_ENABLED=false
+      - LOGGING_LEVEL=warn
+    ports:
+      - "5601:5601"
+    networks:
+      - soc-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "curl -f http://localhost:5601/api/status || exit 1"]
+      interval: 20s
+      timeout: 10s
+      retries: 10
+      start_period: 90s
+    restart: unless-stopped
+
+  # ── Logstash ────────────────────────────────────────────────────────────────
+  logstash:
+    image: docker.elastic.co/logstash/logstash:8.12.0
+    container_name: soc-logstash
+    environment:
+      - LS_JAVA_OPTS=-Xms1g -Xmx1g
+      - PIPELINE_WORKERS=2
+      - PIPELINE_BATCH_SIZE=500
+      - LOG_LEVEL=warn
+    volumes:
+      - ./config/logstash-suricata.conf:/usr/share/logstash/pipeline/suricata.conf:ro
+      # Override elasticsearch host for docker networking
+    command: >
+      bash -c "
+        sed -i 's|http://localhost:9200|http://elasticsearch:9200|g'
+          /usr/share/logstash/pipeline/suricata.conf &&
+        /usr/local/bin/docker-entrypoint
+      "
+    ports:
+      - "5044:5044"    # Beats input
+      - "9600:9600"    # Logstash monitoring API
+    networks:
+      - soc-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+    restart: unless-stopped
+
+  # ── Redis (API result cache) ─────────────────────────────────────────────────
+  redis:
+    image: redis:7-alpine
+    container_name: soc-redis
+    command: >
+      redis-server
+        --maxmemory 256mb
+        --maxmemory-policy allkeys-lru
+        --save ""
+        --appendonly no
+    ports:
+      - "6379:6379"
+    networks:
+      - soc-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    restart: unless-stopped
+
+  # ── SOC Pipeline (Python enrichment + ML scoring) ───────────────────────────
+  soc-pipeline:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: soc-pipeline
+    environment:
+      - ABUSEIPDB_API_KEY=${ABUSEIPDB_API_KEY}
+      - VIRUSTOTAL_API_KEY=${VIRUSTOTAL_API_KEY}
+      - ELASTICSEARCH_HOST=http://elasticsearch:9200
+      - ELASTICSEARCH_INDEX=suricata-alerts-*
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - USE_REDIS=true
+      - POLL_INTERVAL=30
+      - BATCH_SIZE=50
+      - LOG_LEVEL=INFO
+      - LOG_FILE=/app/logs/pipeline.log
+      - SLACK_WEBHOOK_URL=${SLACK_WEBHOOK_URL:-}
+      - CONFIDENCE_THRESHOLD=0.70
+    volumes:
+      - ./logs:/app/logs
+      - ./model:/app/model
+      - ./data:/app/data
+    networks:
+      - soc-net
+    depends_on:
+      elasticsearch:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+    command: >
+      bash -c "
+        echo 'Waiting for Elasticsearch...' &&
+        until curl -sf http://elasticsearch:9200/_cluster/health; do sleep 5; done &&
+        echo 'Generating training data and training model...' &&
+        python3 ml/generate_training_data.py &&
+        python3 ml/train_model.py &&
+        echo 'Starting triage pipeline...' &&
+        python3 pipeline/pipeline.py
+      "
+
+  # ── Filebeat (for Docker log collection — optional) ──────────────────────────
+  # Uncomment if running Suricata on the host and want to ship via Docker
+  # filebeat:
+  #   image: docker.elastic.co/beats/filebeat:8.12.0
+  #   container_name: soc-filebeat
+  #   user: root
+  #   volumes:
+  #     - ./config/filebeat.yml:/usr/share/filebeat/filebeat.yml:ro
+  #     - /var/log/suricata:/var/log/suricata:ro
+  #     - /var/lib/filebeat/data:/usr/share/filebeat/data
+  #   networks:
+  #     - soc-net
+  #   depends_on:
+  #     - logstash
+  #   restart: unless-stopped
+
+# ── Volumes ──────────────────────────────────────────────────────────────────
+volumes:
+  es_data:
+    driver: local
+    driver_opts:
+      type: none
+      o: bind
+      device: ./data/elasticsearch
+
+# ── Network ──────────────────────────────────────────────────────────────────
+networks:
+  soc-net:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/24

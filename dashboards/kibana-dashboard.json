@@ -1,0 +1,239 @@
+{
+  "_meta": {
+    "title": "SOC Alert Triage Dashboard v2.0",
+    "description": "AI-powered SOC triage dashboard for Suricata IDS alerts",
+    "created_by": "soc-triage-system",
+    "es_version": "8.x",
+    "kibana_version": "8.x"
+  },
+  "dashboard": {
+    "id": "soc-triage-main",
+    "title": "SOC Alert Triage — Main Dashboard",
+    "description": "Real-time view of enriched Suricata IDS alerts with ML risk scores",
+    "timeRestore": true,
+    "timeTo": "now",
+    "timeFrom": "now-24h",
+    "refreshInterval": { "value": 30, "pause": false },
+    "panels": [
+      {
+        "id": "risk-distribution-donut",
+        "title": "Alert Risk Distribution",
+        "type": "donut",
+        "position": { "x": 0, "y": 0, "w": 12, "h": 6 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "aggregation": "terms",
+          "field": "risk_score",
+          "description": "Breakdown of alerts by ML risk label",
+          "color_scheme": {
+            "CRITICAL": "#FF0000",
+            "HIGH":     "#FFA500",
+            "MEDIUM":   "#FFFF00",
+            "LOW":      "#00FF00",
+            "PENDING":  "#808080",
+            "DUPLICATE":"#C0C0C0"
+          }
+        }
+      },
+      {
+        "id": "top-attacking-ips",
+        "title": "Top 10 Attacking Source IPs",
+        "type": "bar",
+        "position": { "x": 12, "y": 0, "w": 12, "h": 6 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "aggregation": "terms",
+          "field": "src_ip.keyword",
+          "size": 10,
+          "order": "desc",
+          "description": "Most active attacking IP addresses by alert count"
+        }
+      },
+      {
+        "id": "alerts-over-time",
+        "title": "Alerts Over Time",
+        "type": "area",
+        "position": { "x": 0, "y": 6, "w": 24, "h": 6 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "aggregation": "date_histogram",
+          "field": "@timestamp",
+          "interval": "auto",
+          "split_by": {
+            "field": "risk_score",
+            "type": "terms"
+          },
+          "description": "Alert volume over time split by risk level"
+        }
+      },
+      {
+        "id": "geo-attack-map",
+        "title": "Global Attack Origin Map",
+        "type": "map",
+        "position": { "x": 0, "y": 12, "w": 16, "h": 10 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "geo_field": "src_geoip.location",
+          "metric": "count",
+          "description": "Geographic distribution of attack source IPs",
+          "map_type": "heatmap"
+        }
+      },
+      {
+        "id": "alert-category-breakdown",
+        "title": "Alert Category Breakdown",
+        "type": "horizontal_bar",
+        "position": { "x": 16, "y": 12, "w": 8, "h": 10 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "aggregation": "terms",
+          "field": "alert_category.keyword",
+          "size": 15,
+          "description": "Distribution of Suricata alert categories"
+        }
+      },
+      {
+        "id": "mitre-technique-table",
+        "title": "MITRE ATT&CK Technique Distribution",
+        "type": "data_table",
+        "position": { "x": 0, "y": 22, "w": 12, "h": 8 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "columns": [
+            { "field": "mitre.technique_id",   "label": "Technique ID" },
+            { "field": "mitre.technique_name", "label": "Technique"    },
+            { "field": "mitre.tactic",         "label": "Tactic"       },
+            { "field": "_count",               "label": "Alert Count"  }
+          ],
+          "aggregation": "terms",
+          "group_by": ["mitre.technique_id.keyword", "mitre.tactic.keyword"],
+          "description": "MITRE ATT&CK technique mapping of all alerts"
+        }
+      },
+      {
+        "id": "high-critical-feed",
+        "title": "HIGH / CRITICAL Alert Feed (Live)",
+        "type": "data_table",
+        "position": { "x": 12, "y": 22, "w": 12, "h": 8 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "filter": "risk_score:(HIGH OR CRITICAL)",
+          "sort": { "field": "@timestamp", "order": "desc" },
+          "size": 20,
+          "columns": [
+            { "field": "@timestamp",                       "label": "Time"        },
+            { "field": "risk_score",                       "label": "Risk"        },
+            { "field": "alert_signature",                  "label": "Signature"   },
+            { "field": "src_ip",                           "label": "Src IP"      },
+            { "field": "dest_port",                        "label": "Dst Port"    },
+            { "field": "enrichment.abuse_confidence_score","label": "Abuse Score" },
+            { "field": "enrichment.vt_malicious_count",    "label": "VT Hits"     },
+            { "field": "ml_confidence",                    "label": "ML Conf"     },
+            { "field": "mitre.technique_id",               "label": "MITRE"       }
+          ],
+          "description": "Real-time feed of analyst-actionable alerts"
+        }
+      },
+      {
+        "id": "dest-port-distribution",
+        "title": "Top Targeted Destination Ports",
+        "type": "pie",
+        "position": { "x": 0, "y": 30, "w": 8, "h": 6 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "aggregation": "terms",
+          "field": "dest_port",
+          "size": 10,
+          "description": "Which destination ports are most targeted"
+        }
+      },
+      {
+        "id": "abuse-score-histogram",
+        "title": "AbuseIPDB Score Distribution",
+        "type": "histogram",
+        "position": { "x": 8, "y": 30, "w": 8, "h": 6 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "field": "enrichment.abuse_confidence_score",
+          "interval": 10,
+          "description": "Distribution of AbuseIPDB confidence scores across all alerts"
+        }
+      },
+      {
+        "id": "protocol-breakdown",
+        "title": "Protocol Distribution",
+        "type": "donut",
+        "position": { "x": 16, "y": 30, "w": 8, "h": 6 },
+        "config": {
+          "index_pattern": "suricata-alerts-*",
+          "aggregation": "terms",
+          "field": "proto.keyword",
+          "description": "TCP/UDP/ICMP breakdown of alerts"
+        }
+      }
+    ]
+  },
+  "index_pattern": {
+    "title": "suricata-alerts-*",
+    "timeFieldName": "@timestamp",
+    "fields": [
+      { "name": "risk_score",                        "type": "keyword" },
+      { "name": "enriched",                          "type": "keyword" },
+      { "name": "ml_confidence",                     "type": "float"   },
+      { "name": "src_ip",                            "type": "ip"      },
+      { "name": "dest_ip",                           "type": "ip"      },
+      { "name": "src_port",                          "type": "integer" },
+      { "name": "dest_port",                         "type": "integer" },
+      { "name": "proto",                             "type": "keyword" },
+      { "name": "alert_signature",                   "type": "keyword" },
+      { "name": "alert_category",                    "type": "keyword" },
+      { "name": "alert_severity",                    "type": "integer" },
+      { "name": "alert_sid",                         "type": "integer" },
+      { "name": "enrichment.abuse_confidence_score", "type": "integer" },
+      { "name": "enrichment.vt_malicious_count",     "type": "integer" },
+      { "name": "enrichment.src_country_code",       "type": "keyword" },
+      { "name": "enrichment.is_tor_exit",            "type": "boolean" },
+      { "name": "mitre.tactic",                      "type": "keyword" },
+      { "name": "mitre.technique_id",                "type": "keyword" },
+      { "name": "mitre.technique_name",              "type": "keyword" },
+      { "name": "src_geoip.location",                "type": "geo_point"},
+      { "name": "src_geoip.country_name",            "type": "keyword" },
+      { "name": "src_ip_frequency",                  "type": "integer" },
+      { "name": "triage_timestamp",                  "type": "date"    },
+      { "name": "@timestamp",                        "type": "date"    }
+    ]
+  },
+  "setup_instructions": {
+    "steps": [
+      "1. Open Kibana at http://localhost:5601",
+      "2. Go to: Stack Management > Index Patterns > Create index pattern",
+      "3. Enter pattern: suricata-alerts-*  |  Time field: @timestamp",
+      "4. Go to: Stack Management > Saved Objects > Import",
+      "5. Import this JSON file to load all dashboard panels",
+      "6. Go to: Analytics > Dashboard > SOC Alert Triage — Main Dashboard",
+      "7. Set time range to Last 24 hours, enable auto-refresh every 30s"
+    ],
+    "manual_panels": {
+      "risk_distribution": {
+        "type": "Aggregation-based > Pie",
+        "bucket": "Split slices > Terms > risk_score.keyword > Size: 10",
+        "note": "Use Custom Colors to map CRITICAL=red, HIGH=orange, MEDIUM=yellow, LOW=green"
+      },
+      "top_ips": {
+        "type": "Aggregation-based > Vertical Bar",
+        "bucket": "X-axis > Terms > src_ip.keyword > Size: 10 > Order: Count Desc"
+      },
+      "attack_map": {
+        "type": "Maps > Add layer > Documents",
+        "geo_field": "src_geoip.location",
+        "note": "Use Heatmap layer type for density visualization"
+      },
+      "high_critical_table": {
+        "type": "Aggregation-based > Data Table",
+        "filter": "risk_score:HIGH OR risk_score:CRITICAL",
+        "bucket": "Split rows > Terms > alert_signature.keyword > Size: 50",
+        "note": "Add sub-bucket for src_ip.keyword to see IP per signature"
+      }
+    }
+  }
+}

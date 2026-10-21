@@ -1,0 +1,69 @@
+# /etc/filebeat/filebeat.yml
+# Filebeat configuration for shipping Suricata EVE JSON to Logstash
+
+# ─── INPUT: Read Suricata EVE JSON ───────────────────────────────────────────
+filebeat.inputs:
+  - type: log
+    enabled: true
+    paths:
+      - /var/log/suricata/eve.json
+
+    # Treat each line as a JSON object and lift keys to top level
+    json.keys_under_root: true
+    json.add_error_key: true
+    json.message_key: message
+
+    # Only ship alert-type events to reduce volume (optional: remove to ship all)
+    # json.overwrite_keys: true
+
+    # Tag all events for easy pipeline identification
+    tags: ["suricata", "ids", "soc-lab"]
+
+    # Track file position so Filebeat resumes after restart
+    # Registry is stored in: /var/lib/filebeat/registry/
+    close_inactive: 5m
+    clean_inactive: 72h
+    ignore_older: 24h
+
+    # Backoff settings for log files with bursty output
+    backoff: 1s
+    max_backoff: 10s
+
+# ─── OUTPUT: Send to Logstash ─────────────────────────────────────────────────
+output.logstash:
+  hosts: ["localhost:5044"]
+
+  # Connection resilience
+  timeout: 30
+  max_retries: 3
+  bulk_max_size: 2048
+
+  # Compression reduces network bandwidth
+  compression_level: 3
+
+# ─── DISABLE default Elasticsearch output ─────────────────────────────────────
+# The section below must remain commented out when using Logstash output
+# output.elasticsearch:
+#   hosts: ["localhost:9200"]
+
+# ─── LOGGING ─────────────────────────────────────────────────────────────────
+logging.level: info
+logging.to_files: true
+logging.files:
+  path: /var/log/filebeat
+  name: filebeat.log
+  keepfiles: 7
+  permissions: 0640
+
+# ─── PROCESSORS: Enrich events before shipping ───────────────────────────────
+processors:
+  # Add the hostname of the sensor to every event
+  - add_host_metadata:
+      when.not.contains.tags: forwarded
+
+  # Add Filebeat version metadata
+  - add_fields:
+      target: ''
+      fields:
+        sensor_type: suricata
+        pipeline_version: "2.0"
